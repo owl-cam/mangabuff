@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MangaBuff Card Statistics
 // @namespace    http://tampermonkey.net/
-// @version      2.0.1
+// @version      2.0.2
 // @description  Показывает статистику владельцев/желающих, цены на лоты и число обменов пользователей
 // @author       zamoroz
 // @match        https://mangabuff.ru/cards*
@@ -15,8 +15,8 @@
 // @connect      mangabuff.ru
 // @connect      mbstat.space
 // @license MIT
-// @downloadURL https://update.greasyfork.org/scripts/563924/MangaBuff%20Card%20Statistics.user.js
-// @updateURL https://update.greasyfork.org/scripts/563924/MangaBuff%20Card%20Statistics.meta.js
+// @downloadURL https://raw.githubusercontent.com/owl-cam/mangabuff/master/mangabuff-card-stats.user.min.js
+// @updateURL https://raw.githubusercontent.com/owl-cam/mangabuff/master/mangabuff-card-stats.user.min.js
 // ==/UserScript==
 
 (function () {
