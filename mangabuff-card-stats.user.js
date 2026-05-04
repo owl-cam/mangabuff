@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MangaBuff Card Statistics
 // @namespace    http://tampermonkey.net/
-// @version      2.0.2
+// @version      2.0.3
 // @description  Показывает статистику владельцев/желающих, цены на лоты и число обменов пользователей
 // @author       zamoroz
 // @match        https://mangabuff.ru/cards*
@@ -194,6 +194,16 @@
   let isProcessingQueue = false;
   let lastRequestTime = 0;
 
+  const scrapeQueue = [];
+  let isProcessingScrapeQueue = false;
+  let scrapeQueueOrder = 0;
+  let scrapeQueueScheduled = false;
+
+  const SCRAPE_PRIORITY = {
+    missing: 0,
+    stale: 1,
+  };
+
   const marketCardsQueue = [];
   let isProcessingMarketCards = false;
   let lotsObserver = null;
@@ -313,6 +323,52 @@
       requestQueue.push({ requestFn, resolve, reject });
       processQueue();
     });
+  }
+
+  function scheduleScrapeQueueProcessing() {
+    if (scrapeQueueScheduled) return;
+
+    scrapeQueueScheduled = true;
+    Promise.resolve().then(() => {
+      scrapeQueueScheduled = false;
+      processScrapeQueue();
+    });
+  }
+
+  function addScrapeToQueue(requestFn, priority = SCRAPE_PRIORITY.stale) {
+    return new Promise((resolve, reject) => {
+      scrapeQueue.push({
+        requestFn,
+        resolve,
+        reject,
+        priority,
+        order: scrapeQueueOrder++,
+      });
+      scheduleScrapeQueueProcessing();
+    });
+  }
+
+  async function processScrapeQueue() {
+    if (isProcessingScrapeQueue || scrapeQueue.length === 0) {
+      return;
+    }
+
+    isProcessingScrapeQueue = true;
+
+    while (scrapeQueue.length > 0) {
+      scrapeQueue.sort((a, b) => a.priority - b.priority || a.order - b.order);
+
+      const { requestFn, resolve, reject } = scrapeQueue.shift();
+
+      try {
+        const result = await requestFn();
+        resolve(result);
+      } catch (error) {
+        reject(error);
+      }
+    }
+
+    isProcessingScrapeQueue = false;
   }
 
   async function processQueue() {
@@ -512,8 +568,8 @@
     });
   }
 
-  async function parseCardStatsFromSite(cardId) {
-    return addToQueue(async () => {
+  async function parseCardStatsFromSite(cardId, priority = SCRAPE_PRIORITY.stale) {
+    return addScrapeToQueue(async () => {
       let wanted = null;
       let owners = null;
 
@@ -542,7 +598,7 @@
       }
 
       return { owners, wanted };
-    });
+    }, priority);
   }
 
   function updateCardStats(cardId, stats, options = {}) {
@@ -647,8 +703,11 @@
     return null;
   }
 
-  async function scrapeAndSubmit(cardId) {
-    const stats = await parseCardStatsFromSite(cardId);
+  async function scrapeAndSubmit(
+    cardId,
+    priority = SCRAPE_PRIORITY.missing,
+  ) {
+    const stats = await parseCardStatsFromSite(cardId, priority);
     if (!stats) return;
 
     updateCardStats(cardId, { owners: stats.owners, wanters: stats.wanted });
@@ -657,7 +716,10 @@
   }
 
   async function scrapeAndCompare(cardId, apiOwners, apiWanted) {
-    const stats = await parseCardStatsFromSite(cardId);
+    const stats = await parseCardStatsFromSite(
+      cardId,
+      SCRAPE_PRIORITY.stale,
+    );
     if (!stats) return;
 
     setCachedCardStats(cardId, stats.owners, stats.wanted);
@@ -670,7 +732,7 @@
   }
 
   async function fetchCardStatsScrape(cardId) {
-    return scrapeAndSubmit(cardId);
+    return scrapeAndSubmit(cardId, SCRAPE_PRIORITY.missing);
   }
 
   async function fetchCardLots(cardId) {
@@ -857,7 +919,7 @@
   }
 
   function handleMissingBackendCard(cardId) {
-    scrapeAndSubmit(cardId);
+    scrapeAndSubmit(cardId, SCRAPE_PRIORITY.missing);
   }
 
   function processMarketPage(cards, config) {
