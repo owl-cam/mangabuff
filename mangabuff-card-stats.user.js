@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MangaBuff Card Statistics
 // @namespace    http://tampermonkey.net/
-// @version      2.0.3
+// @version      2.0.4
 // @description  Показывает статистику владельцев/желающих, цены на лоты и число обменов пользователей
 // @author       zamoroz
 // @match        https://mangabuff.ru/cards*
@@ -10,13 +10,14 @@
 // @match        https://mangabuff.ru/decks/*
 // @match        https://mangabuff.ru/clubs/*/boost
 // @match        https://mangabuff.ru/manga/*
+// @match        https://mangabuff.ru/trades/*
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @connect      mangabuff.ru
 // @connect      mbstat.space
 // @license MIT
-// @downloadURL https://raw.githubusercontent.com/owl-cam/mangabuff/master/mangabuff-card-stats.user.min.js
-// @updateURL https://raw.githubusercontent.com/owl-cam/mangabuff/master/mangabuff-card-stats.user.min.js
+// @downloadURL https://raw.githubusercontent.com/owl-cam/mangabuff/master/mangabuff-card-stats.user.js
+// @updateURL https://raw.githubusercontent.com/owl-cam/mangabuff/master/mangabuff-card-stats.user.js
 // ==/UserScript==
 
 (function () {
@@ -79,6 +80,24 @@
       showStats: true,
       showLots: false,
     },
+    "trade-history": {
+      cardSelector: ".history__body-item",
+      wrapperSelector: null,
+      idAttribute: null,
+      idLocation: "link",
+      linkSelector: 'a[href*="/cards/"]',
+      showStats: true,
+      showLots: false,
+    },
+    trade: {
+      cardSelector: ".trade__main-item",
+      wrapperSelector: null,
+      idAttribute: null,
+      idLocation: "link",
+      linkSelector: 'a[href*="/cards/"]',
+      showStats: true,
+      showLots: false,
+    },
   };
 
   const styles = `
@@ -135,6 +154,40 @@
         }
         .lootbox__card {
             position: relative;
+        }
+        .history__body-item {
+            position: relative;
+        }
+        .trade__main-item {
+            position: relative;
+        }
+        .trade__main-item .card-stats-overlay {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            display: flex;
+            flex-direction: row;
+            gap: 4px;
+            padding: 2px 5px;
+            font-size: 8px;
+        }
+        .trade__main-item .card-stats-row {
+            margin: 0;
+        }
+        .trade__main-item .card-stats-label {
+            display: none;
+        }
+        .trade__main-item .card-stats-value.owners::before {
+            content: "В:";
+            color: #aaa;
+            font-size: 7px;
+            margin-right: 1px;
+        }
+        .trade__main-item .card-stats-value.wanters::before {
+            content: "Ж:";
+            color: #aaa;
+            font-size: 7px;
+            margin-right: 1px;
         }
         .card-lots-overlay {
             position: absolute;
@@ -288,9 +341,12 @@
     if (pathname.startsWith("/decks/")) return "deck";
     if (pathname.match(/\/clubs\/[^/]+\/boost/)) return "club-boost";
     if (pathname.startsWith("/cards")) return "cards";
-    if (pathname.match(/\/users\/\d+\/cards/)) return "cards";
+    if (pathname.match(/^\/users\/\d+\/cards/)) return "cards";
+    if (pathname.match(/^\/users\/\d+/)) return "trade-history";
     if (pathname.startsWith("/manga/")) return "manga";
     if (pathname.startsWith("/users/")) return "profile";
+    if (pathname.startsWith("/trades/history")) return "trade-history";
+    if (pathname.match(/^\/trades\/\d+/)) return "trade";
 
     return "unknown";
   }
@@ -568,7 +624,10 @@
     });
   }
 
-  async function parseCardStatsFromSite(cardId, priority = SCRAPE_PRIORITY.stale) {
+  async function parseCardStatsFromSite(
+    cardId,
+    priority = SCRAPE_PRIORITY.stale,
+  ) {
     return addScrapeToQueue(async () => {
       let wanted = null;
       let owners = null;
@@ -692,7 +751,10 @@
     }
 
     if (config.idLocation === "link") {
-      const link = element.querySelector(config.linkSelector);
+      let link = element.querySelector(config.linkSelector);
+      if (!link && element.matches && element.matches(config.linkSelector)) {
+        link = element;
+      }
       if (!link) return null;
 
       const href = link.getAttribute("href");
@@ -703,10 +765,7 @@
     return null;
   }
 
-  async function scrapeAndSubmit(
-    cardId,
-    priority = SCRAPE_PRIORITY.missing,
-  ) {
+  async function scrapeAndSubmit(cardId, priority = SCRAPE_PRIORITY.missing) {
     const stats = await parseCardStatsFromSite(cardId, priority);
     if (!stats) return;
 
@@ -716,10 +775,7 @@
   }
 
   async function scrapeAndCompare(cardId, apiOwners, apiWanted) {
-    const stats = await parseCardStatsFromSite(
-      cardId,
-      SCRAPE_PRIORITY.stale,
-    );
+    const stats = await parseCardStatsFromSite(cardId, SCRAPE_PRIORITY.stale);
     if (!stats) return;
 
     setCachedCardStats(cardId, stats.owners, stats.wanted);
@@ -1049,7 +1105,10 @@
       node.querySelector?.(".manga-cards__item") ||
       node.classList?.contains("lootbox__card") ||
       node.querySelector?.(".lootbox__card") ||
-      node.classList?.contains("lootbox__list")
+      node.classList?.contains("lootbox__list") ||
+      node.classList?.contains("history__item") ||
+      node.querySelector?.(".history__item") ||
+      node.querySelector?.(".trade__main-item")
     );
   }
 
