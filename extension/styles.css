@@ -1,0 +1,156 @@
+.card-stats-overlay {
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 9px;
+  z-index: 10;
+  backdrop-filter: blur(5px);
+  line-height: 1.3;
+}
+
+.card-stats-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 1px 0;
+  white-space: nowrap;
+}
+
+.card-stats-label {
+  color: #aaa;
+  margin-right: 4px;
+  font-size: 8px;
+}
+
+.card-stats-value {
+  font-weight: bold;
+  font-size: 9px;
+}
+
+.card-stats-value.owners {
+  color: #4ade80;
+}
+
+.card-stats-value.wanters {
+  color: #fb923c;
+}
+
+.card-stats-value.card-stats-stale {
+  color: #9ca3af !important;
+}
+
+.card-stats-loading {
+  color: #888;
+  font-style: italic;
+}
+
+.manga-cards__item-wrapper {
+  position: relative;
+}
+
+.deck__item {
+  position: relative;
+}
+
+.club-boost__inner {
+  position: relative;
+}
+
+.lootbox__list {
+  padding-bottom: 40px;
+}
+
+.lootbox__card {
+  position: relative;
+}
+
+.history__body-item {
+  position: relative;
+}
+
+.trade__main-item {
+  position: relative;
+}
+
+.trade__main-item .card-stats-overlay {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  flex-direction: row;
+  gap: 4px;
+  padding: 2px 5px;
+  font-size: 8px;
+}
+
+.trade__main-item .card-stats-row {
+  margin: 0;
+}
+
+.trade__main-item .card-stats-label {
+  display: none;
+}
+
+.trade__main-item .card-stats-value.owners::before {
+  content: "В:";
+  color: #aaa;
+  font-size: 7px;
+  margin-right: 1px;
+}
+
+.trade__main-item .card-stats-value.wanters::before {
+  content: "Ж:";
+  color: #aaa;
+  font-size: 7px;
+  margin-right: 1px;
+}
+
+.card-lots-overlay {
+  position: absolute;
+  top: 8px;
+  right: 5px;
+  background: rgba(0, 0, 0, 0.85);
+  color: white;
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-size: 8px;
+  z-index: 10;
+  backdrop-filter: blur(5px);
+  max-width: 110px;
+  line-height: 1.4;
+}
+
+.card-lots-label {
+  color: #aaa;
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.card-lots-prices {
+  color: #fbbf24;
+  font-weight: bold;
+}
+
+.profile__trades-count {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  background: rgba(139, 0, 255, 0.5);
+  border: 1px solid rgba(139, 0, 255, 0.8);
+  border-radius: 12px;
+  font-size: 12px;
+  color: #a78bfa;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
+.profile__trades-blocked {
+  display: inline-block;
+  margin-left: 4px;
+  color: #ef4444;
+  font-size: 16px;
+  font-weight: bold;
+  vertical-align: middle;
+  cursor: help;
+}

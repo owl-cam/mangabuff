@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "MangaBuff Card Statistics",
+  "version": "2.1.0",
+  "description": "Показывает статистику владельцев/желающих, цены на лоты и число обменов пользователей",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://mangabuff.ru/*",
+    "https://mbstat.space/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mangabuff.ru/cards*",
+        "https://mangabuff.ru/users/*",
+        "https://mangabuff.ru/market*",
+        "https://mangabuff.ru/decks/*",
+        "https://mangabuff.ru/clubs/*/boost",
+        "https://mangabuff.ru/manga/*",
+        "https://mangabuff.ru/trades/*"
+      ],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
