@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MangaBuff Card Statistics
 // @namespace    http://tampermonkey.net/
-// @version      2.0.4
+// @version      2.2.0
 // @description  Показывает статистику владельцев/желающих, цены на лоты и число обменов пользователей
 // @author       zamoroz
 // @match        https://mangabuff.ru/cards*
@@ -12,6 +12,7 @@
 // @match        https://mangabuff.ru/manga/*
 // @match        https://mangabuff.ru/trades/*
 // @grant        GM_xmlhttpRequest
+// @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // @connect      mangabuff.ru
 // @connect      mbstat.space
@@ -34,6 +35,13 @@
   const CACHE_KEY = "mangabuff_card_stats_cache";
   const LOTS_CACHE_KEY = "mangabuff_card_lots_cache";
   const TRADES_CACHE_KEY = "mangabuff_user_trades_cache";
+  const SETTINGS_KEY = "mangabuff_settings";
+  const DEFAULT_SETTINGS = {
+    showStats: true,
+    showLots: true,
+    showTrades: true,
+    compactMode: false,
+  };
   const REQUEST_DELAY = 500;
   const MAX_RETRIES = 3;
   const RETRY_DELAY = 2000;
@@ -66,6 +74,7 @@
     "club-boost": {
       cardSelector: ".club-boost__inner",
       wrapperSelector: null,
+      statsContainerSelector: ".club-boost__image",
       idAttribute: null,
       idLocation: "link",
       linkSelector: 'a[href*="/cards/"]',
@@ -143,10 +152,13 @@
         .manga-cards__item-wrapper {
             position: relative;
         }
+        .manga-cards__item {
+            position: relative;
+        }
         .deck__item {
             position: relative;
         }
-        .club-boost__inner {
+        .club-boost__image {
             position: relative;
         }
         .lootbox__list {
@@ -233,6 +245,110 @@
             vertical-align: middle;
             cursor: help;
         }
+        .mangabuff-stats-compact .card-stats-overlay {
+            padding: 2px 4px;
+            font-size: 8px;
+            line-height: 1.15;
+        }
+        .mangabuff-stats-compact .card-stats-label {
+            display: none;
+        }
+        .mangabuff-stats-compact .card-stats-row {
+            display: inline-flex;
+            margin: 0 2px;
+        }
+        .mangabuff-stats-compact .card-stats-value.owners::before {
+            content: "В:";
+            color: #aaa;
+            font-size: 7px;
+            margin-right: 1px;
+        }
+        .mangabuff-stats-compact .card-stats-value.wanters::before {
+            content: "Ж:";
+            color: #aaa;
+            font-size: 7px;
+            margin-right: 1px;
+        }
+        .mangabuff-stats-compact .card-lots-overlay {
+            padding: 2px 4px;
+            max-width: 90px;
+            line-height: 1.2;
+        }
+        .mangabuff-stats-compact .card-lots-label {
+            display: none;
+        }
+        .mangabuff-stats-compact .profile__trades-count {
+            margin-left: 4px;
+            padding: 1px 6px;
+            font-size: 10px;
+        }
+        .mangabuff-settings-backdrop {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 2147483647;
+        }
+        .mangabuff-settings-dialog {
+            width: min(360px, 100%);
+            max-height: calc(100vh - 32px);
+            overflow-y: auto;
+            padding: 18px;
+            border: 1px solid rgba(167, 139, 250, 0.45);
+            border-radius: 10px;
+            background: #17131f;
+            color: #f5f3ff;
+            box-shadow: 0 16px 50px rgba(0, 0, 0, 0.45);
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        .mangabuff-settings-dialog h2 {
+            margin: 0 0 14px;
+            font-size: 18px;
+        }
+        .mangabuff-settings-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .mangabuff-settings-row input {
+            width: 20px;
+            height: 20px;
+            accent-color: #8b5cf6;
+        }
+        .mangabuff-settings-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 16px;
+        }
+        .mangabuff-settings-actions button {
+            flex: 1;
+            padding: 9px 12px;
+            border: 1px solid #8b5cf6;
+            border-radius: 6px;
+            background: transparent;
+            color: #ddd6fe;
+            font: inherit;
+            cursor: pointer;
+        }
+        .mangabuff-settings-actions .mangabuff-settings-clear {
+            border-color: #ef4444;
+            color: #fca5a5;
+        }
+        .mangabuff-settings-status {
+            min-height: 18px;
+            margin: 8px 0 0;
+            color: #a7f3d0;
+            font-size: 12px;
+            text-align: center;
+        }
     `;
 
   const styleSheet = document.createElement("style");
@@ -242,6 +358,7 @@
   const cardStatsCache = loadCache(CACHE_KEY, CACHE_TTLS.cardStats);
   const cardLotsCache = loadCache(LOTS_CACHE_KEY, CACHE_TTLS.lots);
   const userTradesCache = loadCache(TRADES_CACHE_KEY, CACHE_TTLS.trades);
+  let settings = loadSettings();
 
   const requestQueue = [];
   let isProcessingQueue = false;
@@ -308,6 +425,101 @@
       localStorage.setItem(key, JSON.stringify(cache));
     } catch (error) {
       errorLog("Ошибка сохранения кеша:", error);
+    }
+  }
+
+  function normalizeSettings(value) {
+    const source = value && typeof value === "object" ? value : {};
+    return Object.fromEntries(
+      Object.entries(DEFAULT_SETTINGS).map(([key, defaultValue]) => [
+        key,
+        typeof source[key] === "boolean" ? source[key] : defaultValue,
+      ]),
+    );
+  }
+
+  function loadSettings() {
+    try {
+      const stored = localStorage.getItem(SETTINGS_KEY);
+      return normalizeSettings(stored ? JSON.parse(stored) : null);
+    } catch (error) {
+      errorLog("Ошибка загрузки настроек:", error);
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+
+  function saveSettings(nextSettings) {
+    const normalizedSettings = normalizeSettings(nextSettings);
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalizedSettings));
+    applySettings(normalizedSettings);
+  }
+
+  function clearObject(object) {
+    Object.keys(object).forEach((key) => delete object[key]);
+  }
+
+  function clearCaches() {
+    localStorage.removeItem(CACHE_KEY);
+    localStorage.removeItem(LOTS_CACHE_KEY);
+    localStorage.removeItem(TRADES_CACHE_KEY);
+    clearObject(cardStatsCache);
+    clearObject(cardLotsCache);
+    clearObject(userTradesCache);
+  }
+
+  function removeStatsOverlays() {
+    document
+      .querySelectorAll(".card-stats-overlay")
+      .forEach((element) => element.remove());
+  }
+
+  function removeLotsOverlays() {
+    document
+      .querySelectorAll(".card-lots-overlay")
+      .forEach((element) => element.remove());
+  }
+
+  function removeTradesIndicators() {
+    document
+      .querySelectorAll(".profile__trades-count, .profile__trades-blocked")
+      .forEach((element) => element.remove());
+  }
+
+  function applyCompactMode() {
+    document.documentElement.classList.toggle(
+      "mangabuff-stats-compact",
+      settings.compactMode,
+    );
+  }
+
+  function applySettings(nextSettings) {
+    const previousSettings = settings;
+    settings = normalizeSettings(nextSettings);
+    applyCompactMode();
+
+    if (!settings.showStats) {
+      removeStatsOverlays();
+    }
+
+    if (!settings.showLots) {
+      removeLotsOverlays();
+      marketCardsQueue.length = 0;
+      lotsObserver?.disconnect();
+    }
+
+    if (!settings.showTrades) {
+      removeTradesIndicators();
+    }
+
+    if (
+      (!previousSettings.showStats && settings.showStats) ||
+      (!previousSettings.showLots && settings.showLots)
+    ) {
+      scheduleProcessCards(0);
+    }
+
+    if (!previousSettings.showTrades && settings.showTrades) {
+      void displayUserTradesCount();
     }
   }
 
@@ -559,6 +771,8 @@
     const result = {};
 
     for (let index = 0; index < cardIds.length; index += CHUNK) {
+      if (!settings.showStats) break;
+
       const chunk = cardIds.slice(index, index + CHUNK);
       const url = `${API_URL}/cards?ids=${chunk.join(",")}`;
 
@@ -604,6 +818,8 @@
   }
 
   function submitCardObservation(cardId, owners, wanted) {
+    if (!settings.showStats) return;
+
     const userId = getCurrentUserId();
     if (!userId) return;
     if (owners === null || wanted === null) return;
@@ -629,10 +845,13 @@
     priority = SCRAPE_PRIORITY.stale,
   ) {
     return addScrapeToQueue(async () => {
+      if (!settings.showStats) return null;
+
       let wanted = null;
       let owners = null;
 
       try {
+        if (!settings.showStats) return null;
         await makeRequestWithDelay();
         const html = await fetchWithRetry(
           `https://mangabuff.ru/cards/${cardId}/offers/want`,
@@ -643,6 +862,7 @@
       }
 
       try {
+        if (!settings.showStats) return null;
         await makeRequestWithDelay();
         const html = await fetchWithRetry(
           `https://mangabuff.ru/cards/${cardId}/users`,
@@ -661,6 +881,8 @@
   }
 
   function updateCardStats(cardId, stats, options = {}) {
+    if (!settings.showStats) return;
+
     const { stale = false } = options;
 
     if (Object.prototype.hasOwnProperty.call(stats, "owners")) {
@@ -719,6 +941,25 @@
   }
 
   function getStatsContainer(cardElement, config) {
+    if (config.statsContainerSelector) {
+      const container = cardElement.querySelector(
+        config.statsContainerSelector,
+      );
+      if (container) {
+        if (getComputedStyle(container).position === "static") {
+          container.style.position = "relative";
+        }
+        return container;
+      }
+    }
+
+    if (cardElement.matches(".manga-cards__item")) {
+      if (getComputedStyle(cardElement).position === "static") {
+        cardElement.style.position = "relative";
+      }
+      return cardElement;
+    }
+
     if (config.wrapperSelector) {
       const wrapper = cardElement.closest(config.wrapperSelector);
       if (wrapper) {
@@ -766,8 +1007,10 @@
   }
 
   async function scrapeAndSubmit(cardId, priority = SCRAPE_PRIORITY.missing) {
+    if (!settings.showStats) return;
+
     const stats = await parseCardStatsFromSite(cardId, priority);
-    if (!stats) return;
+    if (!settings.showStats || !stats) return;
 
     updateCardStats(cardId, { owners: stats.owners, wanters: stats.wanted });
     setCachedCardStats(cardId, stats.owners, stats.wanted);
@@ -775,8 +1018,10 @@
   }
 
   async function scrapeAndCompare(cardId, apiOwners, apiWanted) {
+    if (!settings.showStats) return;
+
     const stats = await parseCardStatsFromSite(cardId, SCRAPE_PRIORITY.stale);
-    if (!stats) return;
+    if (!settings.showStats || !stats) return;
 
     setCachedCardStats(cardId, stats.owners, stats.wanted);
     updateCardStats(cardId, { owners: stats.owners, wanters: stats.wanted });
@@ -792,6 +1037,8 @@
   }
 
   async function fetchCardLots(cardId) {
+    if (!settings.showLots) return [];
+
     const cached = cardLotsCache[cardId];
     if (cached && isFreshTimestamp(cached.timestamp, CACHE_TTLS.lots)) {
       if (cached.lots && cached.lots.length > 0) {
@@ -800,6 +1047,8 @@
     }
 
     return addToQueue(async () => {
+      if (!settings.showLots) return [];
+
       try {
         const html = await fetchWithRetry(
           `https://mangabuff.ru/market/card/${cardId}`,
@@ -823,6 +1072,10 @@
   }
 
   async function fetchUserTradesCount(userId) {
+    if (!settings.showTrades) {
+      return { count: null, isBlocked: false };
+    }
+
     const cached = userTradesCache[userId];
     if (
       cached &&
@@ -833,6 +1086,10 @@
     }
 
     return addToQueue(async () => {
+      if (!settings.showTrades) {
+        return { count: null, isBlocked: false };
+      }
+
       try {
         const html = await fetchWithRetry(
           `https://mangabuff.ru/trades/offers/${userId}`,
@@ -856,6 +1113,8 @@
   }
 
   async function displayUserTradesCount() {
+    if (!settings.showTrades) return;
+
     const profileElement = document.querySelector(".profile[data-user-id]");
     if (!profileElement) return;
 
@@ -870,7 +1129,7 @@
     if (nameElement.querySelector(".profile__trades-count")) return;
 
     const result = await fetchUserTradesCount(userId);
-    if (result && result.count !== null) {
+    if (settings.showTrades && result && result.count !== null) {
       const tradesSpan = document.createElement("span");
       tradesSpan.className = "profile__trades-count";
       tradesSpan.textContent = result.count;
@@ -893,12 +1152,14 @@
   }
 
   async function displayCardLots(cardId, wrapper) {
+    if (!settings.showLots) return;
+
     if (wrapper.querySelector(".card-lots-overlay")) {
       return;
     }
 
     const lots = await fetchCardLots(cardId);
-    if (lots && lots.length > 0) {
+    if (settings.showLots && lots && lots.length > 0) {
       const overlay = createLotsOverlay(lots);
       if (overlay) {
         wrapper.appendChild(overlay);
@@ -907,6 +1168,8 @@
   }
 
   function addMarketCardToQueue(cardId, wrapper) {
+    if (!settings.showLots) return;
+
     marketCardsQueue.push({ cardId, wrapper });
     processMarketCardsQueue();
   }
@@ -919,6 +1182,11 @@
     isProcessingMarketCards = true;
 
     while (marketCardsQueue.length > 0) {
+      if (!settings.showLots) {
+        marketCardsQueue.length = 0;
+        break;
+      }
+
       const { cardId, wrapper } = marketCardsQueue.shift();
 
       if (
@@ -933,7 +1201,10 @@
   }
 
   function initLotsObserver() {
-    if (lotsObserver) return;
+    if (!settings.showLots) return;
+    if (lotsObserver) {
+      lotsObserver.disconnect();
+    }
 
     lotsObserver = new IntersectionObserver(
       (entries) => {
@@ -955,6 +1226,8 @@
   }
 
   function hydrateCardStats(cardId, stats, now) {
+    if (!settings.showStats) return;
+
     const updatedAtMs = stats.updated_at ? Date.parse(stats.updated_at) : 0;
     const isStale = !updatedAtMs || now - updatedAtMs > STALE_AFTER_MS;
 
@@ -975,10 +1248,14 @@
   }
 
   function handleMissingBackendCard(cardId) {
+    if (!settings.showStats) return;
+
     scrapeAndSubmit(cardId, SCRAPE_PRIORITY.missing);
   }
 
   function processMarketPage(cards, config) {
+    if (!settings.showLots || !config.showLots) return;
+
     const marketContainer = document.querySelector(".market-list__cards--all");
     if (!marketContainer) return;
 
@@ -996,7 +1273,7 @@
     const pendingIds = [];
 
     cards.forEach((card) => {
-      if (config.showStats) {
+      if (settings.showStats && config.showStats) {
         const container = getStatsContainer(card, config);
         if (!container) return;
 
@@ -1019,7 +1296,7 @@
         }
       }
 
-      if (config.showLots) {
+      if (settings.showLots && config.showLots) {
         const container = getStatsContainer(card, config);
         if (!container) return;
 
@@ -1030,9 +1307,11 @@
       }
     });
 
-    if (pendingIds.length > 0) {
+    if (settings.showStats && pendingIds.length > 0) {
       fetchCardStatsBatch(pendingIds)
         .then((results) => {
+          if (!settings.showStats) return;
+
           const now = Date.now();
           pendingIds.forEach((id) => {
             const stats = results[id];
@@ -1064,6 +1343,13 @@
     const config = getPageConfig(pageType);
     if (!config) {
       log(`Конфигурация не найдена для типа: ${pageType}`);
+      return;
+    }
+
+    if (
+      (!settings.showStats || !config.showStats) &&
+      (!settings.showLots || !config.showLots)
+    ) {
       return;
     }
 
@@ -1127,6 +1413,11 @@
   }
 
   function handleLootboxAttributeMutation(card) {
+    if (!settings.showStats) {
+      card.querySelector(".card-stats-overlay")?.remove();
+      return;
+    }
+
     const oldOverlay = card.querySelector(".card-stats-overlay");
     if (oldOverlay) {
       oldOverlay.remove();
@@ -1143,6 +1434,8 @@
     card.appendChild(overlay);
 
     fetchCardStatsBatch([cardId]).then((results) => {
+      if (!settings.showStats) return;
+
       const stats = results[cardId];
       if (stats !== undefined) {
         const now = Date.now();
@@ -1151,6 +1444,111 @@
         handleMissingBackendCard(cardId);
       }
     });
+  }
+
+  function openSettingsModal() {
+    if (document.querySelector(".mangabuff-settings-backdrop")) return;
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "mangabuff-settings-backdrop";
+    backdrop.innerHTML = `
+      <section class="mangabuff-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="mangabuff-settings-title">
+        <h2 id="mangabuff-settings-title">MangaBuff Stats</h2>
+        <label class="mangabuff-settings-row">
+          <span>Статистика карт</span>
+          <input type="checkbox" data-setting="showStats">
+        </label>
+        <label class="mangabuff-settings-row">
+          <span>Цены лотов</span>
+          <input type="checkbox" data-setting="showLots">
+        </label>
+        <label class="mangabuff-settings-row">
+          <span>Количество обменов</span>
+          <input type="checkbox" data-setting="showTrades">
+        </label>
+        <label class="mangabuff-settings-row">
+          <span>Компактный режим</span>
+          <input type="checkbox" data-setting="compactMode">
+        </label>
+        <div class="mangabuff-settings-actions">
+          <button class="mangabuff-settings-clear" type="button">Очистить кэш</button>
+          <button class="mangabuff-settings-close" type="button">Закрыть</button>
+        </div>
+        <p class="mangabuff-settings-status" role="status" aria-live="polite"></p>
+      </section>
+    `;
+
+    const status = backdrop.querySelector(".mangabuff-settings-status");
+    const closeModal = () => {
+      document.removeEventListener("keydown", handleKeydown);
+      backdrop.remove();
+    };
+    const handleKeydown = (event) => {
+      if (event.key === "Escape") {
+        closeModal();
+      }
+    };
+
+    backdrop.querySelectorAll("[data-setting]").forEach((input) => {
+      input.checked = settings[input.dataset.setting];
+      input.addEventListener("change", () => {
+        const nextSettings = { ...settings };
+        nextSettings[input.dataset.setting] = input.checked;
+
+        try {
+          saveSettings(nextSettings);
+          status.textContent = "Настройки сохранены";
+        } catch (error) {
+          status.textContent = `Ошибка: ${error.message}`;
+        }
+      });
+    });
+
+    backdrop
+      .querySelector(".mangabuff-settings-clear")
+      .addEventListener("click", () => {
+        if (!confirm("Очистить весь кэш MangaBuff Stats?")) return;
+
+        try {
+          clearCaches();
+          status.textContent = "Кэш очищен";
+        } catch (error) {
+          status.textContent = `Ошибка: ${error.message}`;
+        }
+      });
+    backdrop
+      .querySelector(".mangabuff-settings-close")
+      .addEventListener("click", closeModal);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) {
+        closeModal();
+      }
+    });
+
+    document.addEventListener("keydown", handleKeydown);
+    document.body.appendChild(backdrop);
+    backdrop.querySelector("[data-setting]").focus();
+  }
+
+  function handleStorageEvent(event) {
+    if (event.storageArea !== localStorage) return;
+
+    if (event.key === SETTINGS_KEY) {
+      try {
+        applySettings(event.newValue ? JSON.parse(event.newValue) : null);
+      } catch (error) {
+        errorLog("Ошибка применения настроек:", error);
+      }
+    }
+    if (event.key === CACHE_KEY && event.newValue === null) {
+      clearObject(cardStatsCache);
+    }
+    if (event.key === LOTS_CACHE_KEY && event.newValue === null) {
+      clearObject(cardLotsCache);
+    }
+    if (event.key === TRADES_CACHE_KEY && event.newValue === null) {
+      clearObject(userTradesCache);
+    }
   }
 
   const observer = new MutationObserver((mutations) => {
@@ -1200,14 +1598,20 @@
   });
 
   function bootstrap() {
+    applyCompactMode();
     processCards();
-    displayUserTradesCount();
+    void displayUserTradesCount();
     observer.observe(document.body, {
       childList: true,
       subtree: true,
       attributes: true,
       attributeFilter: ["data-id"],
     });
+  }
+
+  window.addEventListener("storage", handleStorageEvent);
+  if (typeof GM_registerMenuCommand === "function") {
+    GM_registerMenuCommand("Настройки MangaBuff Stats", openSettingsModal);
   }
 
   if (document.readyState === "loading") {

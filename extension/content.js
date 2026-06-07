@@ -12,15 +12,23 @@
   const CACHE_KEY = "mangabuff_card_stats_cache";
   const LOTS_CACHE_KEY = "mangabuff_card_lots_cache";
   const TRADES_CACHE_KEY = "mangabuff_user_trades_cache";
+  const SETTINGS_KEY = "mangabuff_settings";
+  const DEFAULT_SETTINGS = {
+    showStats: true,
+    showLots: true,
+    showTrades: true,
+    compactMode: false,
+  };
   const REQUEST_DELAY = 500;
   const MAX_RETRIES = 3;
   const RETRY_DELAY = 2000;
 
   const PAGE_CONFIGS = {
     cards: {
-      cardSelector: ".manga-cards__item[data-card-id]",
+      cardSelector:
+        ".manga-cards__item[data-card-id], .lootbox__card[data-id]",
       wrapperSelector: ".manga-cards__item-wrapper",
-      idAttribute: "data-card-id",
+      idAttribute: "data-card-id,data-id",
       idLocation: "card",
       showStats: true,
       showLots: false,
@@ -44,6 +52,7 @@
     "club-boost": {
       cardSelector: ".club-boost__inner",
       wrapperSelector: null,
+      statsContainerSelector: ".club-boost__image",
       idAttribute: null,
       idLocation: "link",
       linkSelector: 'a[href*="/cards/"]',
@@ -81,6 +90,7 @@
   let cardStatsCache = {};
   let cardLotsCache = {};
   let userTradesCache = {};
+  let settings = { ...DEFAULT_SETTINGS };
   let cachedCurrentUserId = null;
 
   const requestQueue = [];
@@ -230,6 +240,112 @@
     void storageSet({ [key]: cache }).catch((error) => {
       errorLog("Ошибка сохранения кеша:", error);
     });
+  }
+
+  function normalizeSettings(value) {
+    const source = value && typeof value === "object" ? value : {};
+    return Object.fromEntries(
+      Object.entries(DEFAULT_SETTINGS).map(([key, defaultValue]) => [
+        key,
+        typeof source[key] === "boolean" ? source[key] : defaultValue,
+      ]),
+    );
+  }
+
+  async function loadSettings() {
+    try {
+      const result = await storageGet([SETTINGS_KEY]);
+      return normalizeSettings(result?.[SETTINGS_KEY]);
+    } catch (error) {
+      errorLog("Ошибка загрузки настроек:", error);
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+
+  function removeStatsOverlays() {
+    document
+      .querySelectorAll(".card-stats-overlay")
+      .forEach((element) => element.remove());
+  }
+
+  function removeLotsOverlays() {
+    document
+      .querySelectorAll(".card-lots-overlay")
+      .forEach((element) => element.remove());
+  }
+
+  function removeTradesIndicators() {
+    document
+      .querySelectorAll(".profile__trades-count, .profile__trades-blocked")
+      .forEach((element) => element.remove());
+  }
+
+  function applyCompactMode() {
+    document.documentElement.classList.toggle(
+      "mangabuff-stats-compact",
+      settings.compactMode,
+    );
+  }
+
+  function applySettings(nextSettings) {
+    const previousSettings = settings;
+    settings = normalizeSettings(nextSettings);
+    applyCompactMode();
+
+    if (!settings.showStats) {
+      removeStatsOverlays();
+    }
+
+    if (!settings.showLots) {
+      removeLotsOverlays();
+      marketCardsQueue.length = 0;
+      lotsObserver?.disconnect();
+    }
+
+    if (!settings.showTrades) {
+      removeTradesIndicators();
+    }
+
+    if (
+      (!previousSettings.showStats && settings.showStats) ||
+      (!previousSettings.showLots && settings.showLots)
+    ) {
+      scheduleProcessCards(0);
+    }
+
+    if (!previousSettings.showTrades && settings.showTrades) {
+      void displayUserTradesCount();
+    }
+  }
+
+  function handleStorageChanges(changes, areaName) {
+    if (areaName !== "local") return;
+
+    if (changes[SETTINGS_KEY]) {
+      applySettings(changes[SETTINGS_KEY].newValue);
+    }
+    if (changes[CACHE_KEY] && changes[CACHE_KEY].newValue === undefined) {
+      cardStatsCache = {};
+    }
+    if (
+      changes[LOTS_CACHE_KEY] &&
+      changes[LOTS_CACHE_KEY].newValue === undefined
+    ) {
+      cardLotsCache = {};
+    }
+    if (
+      changes[TRADES_CACHE_KEY] &&
+      changes[TRADES_CACHE_KEY].newValue === undefined
+    ) {
+      userTradesCache = {};
+    }
+  }
+
+  function registerStorageChangeListener() {
+    const storageEvents =
+      globalThis.browser?.storage?.onChanged ||
+      globalThis.chrome?.storage?.onChanged;
+    storageEvents?.addListener(handleStorageChanges);
   }
 
   function setCachedCardStats(cardId, owners, wanters, timestamp = Date.now()) {
@@ -469,6 +585,8 @@
     const result = {};
 
     for (let index = 0; index < cardIds.length; index += CHUNK) {
+      if (!settings.showStats) break;
+
       const chunk = cardIds.slice(index, index + CHUNK);
       const url = `${API_URL}/cards?ids=${chunk.join(",")}`;
 
@@ -570,6 +688,8 @@
   }
 
   async function submitCardObservation(cardId, owners, wanted) {
+    if (!settings.showStats) return;
+
     const userId = getCurrentUserId();
     if (!userId) return;
     if (owners === null || wanted === null) return;
@@ -596,10 +716,13 @@
     priority = SCRAPE_PRIORITY.stale,
   ) {
     return addScrapeToQueue(async () => {
+      if (!settings.showStats) return null;
+
       let wanted = null;
       let owners = null;
 
       try {
+        if (!settings.showStats) return null;
         await makeRequestWithDelay();
         const html = await fetchWithRetry(
           `https://mangabuff.ru/cards/${cardId}/offers/want`,
@@ -610,6 +733,7 @@
       }
 
       try {
+        if (!settings.showStats) return null;
         await makeRequestWithDelay();
         const html = await fetchWithRetry(
           `https://mangabuff.ru/cards/${cardId}/users`,
@@ -628,6 +752,8 @@
   }
 
   function updateCardStats(cardId, stats, options = {}) {
+    if (!settings.showStats) return;
+
     const { stale = false } = options;
 
     if (Object.prototype.hasOwnProperty.call(stats, "owners")) {
@@ -686,6 +812,23 @@
   }
 
   function getStatsContainer(cardElement, config) {
+    if (config.statsContainerSelector) {
+      const container = cardElement.querySelector(config.statsContainerSelector);
+      if (container) {
+        if (getComputedStyle(container).position === "static") {
+          container.style.position = "relative";
+        }
+        return container;
+      }
+    }
+
+    if (cardElement.matches(".manga-cards__item")) {
+      if (getComputedStyle(cardElement).position === "static") {
+        cardElement.style.position = "relative";
+      }
+      return cardElement;
+    }
+
     if (config.wrapperSelector) {
       const wrapper = cardElement.closest(config.wrapperSelector);
       if (wrapper) {
@@ -733,8 +876,10 @@
   }
 
   async function scrapeAndSubmit(cardId, priority = SCRAPE_PRIORITY.missing) {
+    if (!settings.showStats) return;
+
     const stats = await parseCardStatsFromSite(cardId, priority);
-    if (!stats) return;
+    if (!settings.showStats || !stats) return;
 
     updateCardStats(cardId, { owners: stats.owners, wanters: stats.wanted });
     setCachedCardStats(cardId, stats.owners, stats.wanted);
@@ -742,8 +887,10 @@
   }
 
   async function scrapeAndCompare(cardId, apiOwners, apiWanted) {
+    if (!settings.showStats) return;
+
     const stats = await parseCardStatsFromSite(cardId, SCRAPE_PRIORITY.stale);
-    if (!stats) return;
+    if (!settings.showStats || !stats) return;
 
     setCachedCardStats(cardId, stats.owners, stats.wanted);
     updateCardStats(cardId, { owners: stats.owners, wanters: stats.wanted });
@@ -759,6 +906,8 @@
   }
 
   async function fetchCardLots(cardId) {
+    if (!settings.showLots) return [];
+
     const cached = cardLotsCache[cardId];
     if (cached && isFreshTimestamp(cached.timestamp, CACHE_TTLS.lots)) {
       if (cached.lots && cached.lots.length > 0) {
@@ -767,6 +916,8 @@
     }
 
     return addToQueue(async () => {
+      if (!settings.showLots) return [];
+
       try {
         const html = await fetchWithRetry(
           `https://mangabuff.ru/market/card/${cardId}`,
@@ -790,6 +941,10 @@
   }
 
   async function fetchUserTradesCount(userId) {
+    if (!settings.showTrades) {
+      return { count: null, isBlocked: false };
+    }
+
     const cached = userTradesCache[userId];
     if (
       cached &&
@@ -800,6 +955,10 @@
     }
 
     return addToQueue(async () => {
+      if (!settings.showTrades) {
+        return { count: null, isBlocked: false };
+      }
+
       try {
         const html = await fetchWithRetry(
           `https://mangabuff.ru/trades/offers/${userId}`,
@@ -823,6 +982,8 @@
   }
 
   async function displayUserTradesCount() {
+    if (!settings.showTrades) return;
+
     const profileElement = document.querySelector(".profile[data-user-id]");
     if (!profileElement) return;
 
@@ -837,7 +998,7 @@
     if (nameElement.querySelector(".profile__trades-count")) return;
 
     const result = await fetchUserTradesCount(userId);
-    if (result && result.count !== null) {
+    if (settings.showTrades && result && result.count !== null) {
       const tradesSpan = document.createElement("span");
       tradesSpan.className = "profile__trades-count";
       tradesSpan.textContent = result.count;
@@ -860,12 +1021,14 @@
   }
 
   async function displayCardLots(cardId, wrapper) {
+    if (!settings.showLots) return;
+
     if (wrapper.querySelector(".card-lots-overlay")) {
       return;
     }
 
     const lots = await fetchCardLots(cardId);
-    if (lots && lots.length > 0) {
+    if (settings.showLots && lots && lots.length > 0) {
       const overlay = createLotsOverlay(lots);
       if (overlay) {
         wrapper.appendChild(overlay);
@@ -874,6 +1037,8 @@
   }
 
   function addMarketCardToQueue(cardId, wrapper) {
+    if (!settings.showLots) return;
+
     marketCardsQueue.push({ cardId, wrapper });
     processMarketCardsQueue();
   }
@@ -886,6 +1051,11 @@
     isProcessingMarketCards = true;
 
     while (marketCardsQueue.length > 0) {
+      if (!settings.showLots) {
+        marketCardsQueue.length = 0;
+        break;
+      }
+
       const { cardId, wrapper } = marketCardsQueue.shift();
 
       if (
@@ -900,7 +1070,10 @@
   }
 
   function initLotsObserver() {
-    if (lotsObserver) return;
+    if (!settings.showLots) return;
+    if (lotsObserver) {
+      lotsObserver.disconnect();
+    }
 
     lotsObserver = new IntersectionObserver(
       (entries) => {
@@ -922,6 +1095,8 @@
   }
 
   function hydrateCardStats(cardId, stats, now) {
+    if (!settings.showStats) return;
+
     const updatedAtMs = stats.updated_at ? Date.parse(stats.updated_at) : 0;
     const isStale = !updatedAtMs || now - updatedAtMs > STALE_AFTER_MS;
 
@@ -942,10 +1117,14 @@
   }
 
   function handleMissingBackendCard(cardId) {
+    if (!settings.showStats) return;
+
     scrapeAndSubmit(cardId, SCRAPE_PRIORITY.missing);
   }
 
   function processMarketPage(cards, config) {
+    if (!settings.showLots || !config.showLots) return;
+
     const marketContainer = document.querySelector(".market-list__cards--all");
     if (!marketContainer) return;
 
@@ -963,7 +1142,7 @@
     const pendingIds = [];
 
     cards.forEach((card) => {
-      if (config.showStats) {
+      if (settings.showStats && config.showStats) {
         const container = getStatsContainer(card, config);
         if (!container) return;
 
@@ -986,7 +1165,7 @@
         }
       }
 
-      if (config.showLots) {
+      if (settings.showLots && config.showLots) {
         const container = getStatsContainer(card, config);
         if (!container) return;
 
@@ -997,9 +1176,11 @@
       }
     });
 
-    if (pendingIds.length > 0) {
+    if (settings.showStats && pendingIds.length > 0) {
       fetchCardStatsBatch(pendingIds)
         .then((results) => {
+          if (!settings.showStats) return;
+
           const now = Date.now();
           pendingIds.forEach((id) => {
             const stats = results[id];
@@ -1031,6 +1212,13 @@
     const config = getPageConfig(pageType);
     if (!config) {
       log(`Конфигурация не найдена для типа: ${pageType}`);
+      return;
+    }
+
+    if (
+      (!settings.showStats || !config.showStats) &&
+      (!settings.showLots || !config.showLots)
+    ) {
       return;
     }
 
@@ -1094,6 +1282,11 @@
   }
 
   function handleLootboxAttributeMutation(card) {
+    if (!settings.showStats) {
+      card.querySelector(".card-stats-overlay")?.remove();
+      return;
+    }
+
     const oldOverlay = card.querySelector(".card-stats-overlay");
     if (oldOverlay) {
       oldOverlay.remove();
@@ -1110,6 +1303,8 @@
     card.appendChild(overlay);
 
     fetchCardStatsBatch([cardId]).then((results) => {
+      if (!settings.showStats) return;
+
       const stats = results[cardId];
       if (stats !== undefined) {
         const now = Date.now();
@@ -1171,12 +1366,15 @@
       loadCache(CACHE_KEY, CACHE_TTLS.cardStats),
       loadCache(LOTS_CACHE_KEY, CACHE_TTLS.lots),
       loadCache(TRADES_CACHE_KEY, CACHE_TTLS.trades),
+      loadSettings(),
     ]);
 
-    [cardStatsCache, cardLotsCache, userTradesCache] = caches;
+    [cardStatsCache, cardLotsCache, userTradesCache, settings] = caches;
 
+    applyCompactMode();
+    registerStorageChangeListener();
     processCards();
-    displayUserTradesCount();
+    void displayUserTradesCount();
     observer.observe(document.body, {
       childList: true,
       subtree: true,
